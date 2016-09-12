@@ -50,7 +50,7 @@ public class StockWatcher implements EntryPoint {
 
 	/**
 	 * This is the entry point method.
-	 */
+	 */ 
 	public void onModuleLoad() {
 		// Create table for stock data.
 		stocksFlexTable.setText(0, 0, "Symbol");
