@@ -2,20 +2,28 @@ package com.google.gwt.sample.stockwatcher.client;
 
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 
 import com.google.gwt.core.client.EntryPoint;
-import com.google.gwt.core.shared.GWT;
+import com.google.gwt.core.client.GWT;
+import com.google.gwt.core.client.JsArray;
+import com.google.gwt.core.client.JsonUtils;
 import com.google.gwt.event.dom.client.ClickEvent;
 import com.google.gwt.event.dom.client.ClickHandler;
 import com.google.gwt.event.dom.client.KeyCodes;
 import com.google.gwt.event.dom.client.KeyDownEvent;
 import com.google.gwt.event.dom.client.KeyDownHandler;
+import com.google.gwt.http.client.Request;
+import com.google.gwt.http.client.RequestBuilder;
+import com.google.gwt.http.client.RequestCallback;
+import com.google.gwt.http.client.RequestException;
+import com.google.gwt.http.client.Response;
+import com.google.gwt.http.client.URL;
 import com.google.gwt.i18n.client.DateTimeFormat;
 import com.google.gwt.i18n.client.NumberFormat;
 import com.google.gwt.user.client.Timer;
 import com.google.gwt.user.client.Window;
-import com.google.gwt.user.client.rpc.AsyncCallback;
 import com.google.gwt.user.client.ui.Button;
 import com.google.gwt.user.client.ui.FlexTable;
 import com.google.gwt.user.client.ui.HorizontalPanel;
@@ -36,8 +44,9 @@ public class StockWatcher implements EntryPoint {
 	private Button addStockButton = new Button("Add");
 	private Label lastUpdatedLabel = new Label();
 	private List<String> stocks = new ArrayList<>();
-	private StockPriceServiceAsync stockPriceSvc = GWT.create(StockPriceService.class);
 	private Label errorMsgLabel = new Label();
+
+	private static final String JSON_URL = GWT.getModuleBaseURL() + "BADURL?q=";
 
 	/**
 	 * This is the entry point method.
@@ -58,10 +67,6 @@ public class StockWatcher implements EntryPoint {
 		stocksFlexTable.getCellFormatter().addStyleName(0, 1, "watchListNumericColumn");
 		stocksFlexTable.getCellFormatter().addStyleName(0, 2, "watchListNumericColumn");
 		stocksFlexTable.getCellFormatter().addStyleName(0, 3, "watchListRemoveColumn");
-
-		// Assemble Main panel.
-		errorMsgLabel.setStyleName("errorMessage");
-		errorMsgLabel.setVisible(false);
 
 		// Listen for keyboard events in the input box.
 		newSymbolTextBox.addKeyDownHandler(new KeyDownHandler() {
@@ -85,6 +90,10 @@ public class StockWatcher implements EntryPoint {
 		addPanel.add(newSymbolTextBox);
 		addPanel.add(addStockButton);
 		addPanel.addStyleName("addPanel");
+
+		// Assemble Main panel.
+		errorMsgLabel.setStyleName("errorMessage");
+		errorMsgLabel.setVisible(false);
 
 		// Assemble Main panel.
 		mainPanel.add(errorMsgLabel);
@@ -162,34 +171,39 @@ public class StockWatcher implements EntryPoint {
 	 * Generate random stock prices.
 	 */
 	private void refreshWatchList() {
-		// Initialize the service proxy.
-		if (stockPriceSvc == null) {
-			stockPriceSvc = GWT.create(StockPriceService.class);
+		if (stocks.size() == 0) {
+			return;
 		}
-		// Set up the callback object.
-		AsyncCallback<StockPrice[]> callback = new AsyncCallback<StockPrice[]>() {
-
-			@Override
-			public void onSuccess(StockPrice[] result) {
-				updateTable(result);
+		String url = JSON_URL;
+		// Append watch list stock symbols to query URL.
+		Iterator<String> iter = stocks.iterator();
+		while (iter.hasNext()) {
+			url += iter.next();
+			if (iter.hasNext()) {
+				url += "+";
 			}
+		}
+		url = URL.encode(url);
 
-			@Override
-			public void onFailure(Throwable caught) {
-				// If the stock code is in the list of delisted codes, display
-				// an error message.
-				String details = caught.getMessage();
-				if (caught instanceof DelistedException) {
-					details = "Company '" + ((DelistedException) caught).getSymbol() + "' was delisted";
+		// Send request to server and catch any errors
+		RequestBuilder builder = new RequestBuilder(RequestBuilder.GET, url);
+		try {
+			Request request = builder.sendRequest(null, new RequestCallback() {
+				public void onError(Request request, Throwable exception) {
+					displayError("Couldn't retrieve JSON");
 				}
-				errorMsgLabel.setText("Error: " + details);
-				errorMsgLabel.setVisible(true);
-			}
 
-		};
-
-		// Make the call to the stock price service.
-		stockPriceSvc.getPrices(stocks.toArray(new String[0]), callback);
+				public void onResponseReceived(Request request, Response response) {
+					if (200 == response.getStatusCode()) {
+						updateTable(JsonUtils.<JsArray<StockData>>safeEval(response.getText()));
+					} else {
+						displayError("Couldn't retrieve JSON (" + response.getStatusText() + ")");
+					}
+				}
+			});
+		} catch (RequestException e) {
+			displayError("Couldn't retrieve JSON");
+		}
 	}
 
 	/**
@@ -198,9 +212,9 @@ public class StockWatcher implements EntryPoint {
 	 * @param prices
 	 *            Stock data for all rows.
 	 */
-	private void updateTable(StockPrice[] prices) {
-		for (int i = 0; i < prices.length; i++) {
-			updateTable(prices[i]);
+	private void updateTable(JsArray<StockData> prices) {
+		for (int i = 0; i < prices.length(); i++) {
+			updateTable(prices.get(i));
 		}
 
 		// Display timestamp showing last refresh.
@@ -216,7 +230,7 @@ public class StockWatcher implements EntryPoint {
 	 * @param price
 	 *            Stock data for a single row.
 	 */
-	private void updateTable(StockPrice price) {
+	private void updateTable(StockData price) {
 		// Make sure the stock is still in the stock table.
 		if (!stocks.contains(price.getSymbol())) {
 			return;
@@ -244,5 +258,15 @@ public class StockWatcher implements EntryPoint {
 		}
 
 		changeWidget.setStyleName(changeStyleName);
+	}
+
+	/**
+	 * If can't get JSON, display error message.
+	 * 
+	 * @param error
+	 */
+	private void displayError(String error) {
+		errorMsgLabel.setText("Error: " + error);
+		errorMsgLabel.setVisible(true);
 	}
 }
